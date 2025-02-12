@@ -2,7 +2,9 @@ from django.shortcuts import render, redirect
 from django.urls import reverse
 from django.http import HttpResponse
 from rango.models import Category, Page
-from rango.forms import CategoryForm, PageForm
+from rango.forms import CategoryForm, PageForm, UserForm, UserProfileForm
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
 
 def index(request):
     # Query the databse for a list of all categories currently stored
@@ -51,6 +53,7 @@ def show_category(request, category_name_slug):
     # Render the response and return it to the client
     return render(request, 'rango/category.html', context=context_dict)
 
+@login_required
 def add_category(request):
     form  = CategoryForm()
 
@@ -72,13 +75,14 @@ def add_category(request):
     # Render form with error messages - if any
     return render(request, 'rango/add_category.html', {'form': form})
 
+@login_required
 def add_page(request, category_name_slug):
     try:
         category = Category.objects.get(slug=category_name_slug)
     except Category.DoesNotExist:
         category = None
 
-    # Cannot add page to a non-existant Category
+    # Cannot add page to a non-existent Category
     if category is None:
         return redirect('/rango/')
     
@@ -102,3 +106,103 @@ def add_page(request, category_name_slug):
 
     context_dict = {'form':form, 'category':category}
     return render(request, 'rango/add_page.html', context=context_dict)
+
+def register(request):
+    # Boolean value for telling the template whether reg. was successful.
+    # Initially False, Code changes value to True when reg. successful.
+    registered = False
+
+    # If HTTP post we are interested in processing form data
+    if request.method == 'POST':
+        # Grab info from raw form info.
+        user_form = UserForm(request.POST)
+        profile_form = UserProfileForm(request.POST) 
+
+        # If both forms valid
+        if user_form.is_valid() and profile_form.is_valid():
+            # Save user's form data to database
+            user = user_form.save()
+
+            # hash pasword with set_password method
+            # Once hashed can update User Obj.
+            user.set_password(user.password)
+            user.save()
+
+            # Now looking at UserProfile Instance
+            # Since we need to set user attrib. we set commit = False. 
+            # Delays saving the model until ready - avoid integrity problems
+            profile = profile_form.save(commit=False)
+            profile.user = user
+
+            # Did user provide profile picture? If so get from form and put in UserProfile model
+            if 'picture' in request.FILES:
+                profile.picture = request.FILES['picture']
+
+            # Now save UserProfile model instance
+            profile.save()
+
+            # update variable to indicate that template registration was successful
+            registered = True
+        else:
+            # Invalid form/forms - mistakes or something else
+            # print problems to terminal
+            print(user_form.errors, profile_form.errors)
+    else:
+        # Not a HTTP POST, so render form using two ModelForm Instances
+        # Forms will be blank ready for user input
+        user_form = UserForm()
+        profile_form = UserProfileForm()
+
+    # render template depending on context
+    return render(request, 'rango/register.html', 
+                  context={'user_form' : user_form,
+                           'profile_form': profile_form,
+                           'registered': registered})
+
+def user_login(request):
+    # if request is HTTP POST, try to pull out the relevant info.
+    if request.method == 'POST':
+        # gather the username and password provided by user.
+        # info obtained from login frame
+        # We use request.POST.get('<variable') as it return None if the value does not exist
+        username = request.POST.get('username')
+        password = request.POST.get('password') 
+
+        # Use DJango's machinery to attempt to see if username/password
+        # combination is valid - a User object is returned if it is
+        user = authenticate(username=username, password=password)
+
+        # if we have User obj, the details are correct.
+        # if None, no user with matching credentials was found
+        if user:
+            # Is the account active? Could have been disabled.
+            if user.is_active:
+                # If account is valid and active, we can log user in.
+                # We'll send user back to homepage
+                login(request, user)
+                return redirect(reverse('rango:index'))
+            else:
+                # inactive account was used- no logging in
+                return HttpResponse("Your Rango account is disabled.")
+        else:
+            # bad login details were provided. So can't log user in
+            print(f"invalid login details: {username}, {password}")
+            return HttpResponse("Invalid login details supplied.")
+        
+    # Request is not HTTP POST, so display login form.
+    # Scenario would most likely be a HTTP GET
+    else:
+        # no context variables to pass template sys, hence blank dict. obj.
+        return render(request, 'rango/login.html')
+    
+# Use the login_required() decorator to ensure only those loggin in can access the view
+@login_required
+def user_logout(request):
+    # Since we know user is logged in, we can just log them out.
+    logout(request)
+    # Take user back to homepage
+    return redirect(reverse('rango:index'))
+
+@login_required
+def restricted(request):
+    return render(request, 'rango/restricted.html')
